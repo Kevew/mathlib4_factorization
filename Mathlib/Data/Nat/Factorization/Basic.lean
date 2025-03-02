@@ -8,6 +8,14 @@ import Mathlib.Data.Nat.Factorization.Defs
 import Mathlib.Data.Nat.GCD.BigOperators
 import Mathlib.Order.Interval.Finset.Nat
 import Mathlib.Tactic.IntervalCases
+import Mathlib.Data.Nat.Log
+import Mathlib.Data.Nat.Digits
+import Mathlib.Algebra.BigOperators.Intervals
+import Mathlib.Algebra.GeomSum
+import Mathlib.Algebra.Order.Ring.Abs
+import Mathlib.Data.Nat.Prime.Defs
+import Mathlib.RingTheory.Multiplicity
+
 
 /-!
 # Basic lemmas on prime factorizations
@@ -569,6 +577,250 @@ theorem prod_pow_prime_padicValNat (n : Nat) (hn : n ≠ 0) (m : Nat) (pr : n < 
     simp [factorization_def n (prime_of_mem_primeFactors hp)]
 
 /-! ### Lemmas about factorizations of particular functions -/
+
+theorem finite_multiplicity_exist {p m : ℕ} (hp: p ≠ 1)(hm : m ≠ 0): FiniteMultiplicity p m := by
+  dsimp [FiniteMultiplicity]
+  rcases (by omega : p = 0 ∨ p > 1) with h1 | h2
+  · use 0
+    rw [h1]
+    simp only [zero_add, pow_one, zero_dvd_iff]
+    exact hm
+  · use log p m
+    have crux : p ^ (log p m + 1) > m :=
+      lt_pow_succ_log_self h2 m
+    intro ⟨c, hc⟩
+    have : c ≠ 0 := by
+      intro h
+      rw [h] at hc
+      omega
+    nth_rewrite 2 [hc] at crux
+    have : p ^ (log p m + 1) > 0 :=
+      zero_lt_of_lt crux
+    have : p ^ (log p m + 1) * c ≥ p ^ (log p m + 1) * 1 :=
+      mul_le_mul_left (p ^ (log p m + 1)) (by omega)
+    omega
+
+theorem factorization_mul₀ {p m n : ℕ} (hm: m ≠ 0) (hn: n ≠ 0) (hp : p.Prime) :
+    (m * n).factorization p = m.factorization p + n.factorization p := by {
+  rw [← multiplicity_eq_factorization]
+  rw [← multiplicity_eq_factorization]
+  rw [← multiplicity_eq_factorization]
+  by_cases hfin : FiniteMultiplicity p (m * n)
+  · apply multiplicity_mul (prime_iff.mp hp) hfin
+  · have h1: p ≠ 1 := by exact Prime.ne_one hp
+    push_neg at hfin
+    have h3: m * n ≠ 0 := by exact Nat.mul_ne_zero hm hn
+    have h4: FiniteMultiplicity p (m * n) := by {
+      exact finite_multiplicity_exist h1 h3
+    }
+    contradiction
+  · exact hp
+  · exact hn
+  · exact hp
+  · exact hm
+  · exact hp
+  · exact Nat.mul_ne_zero hm hn
+}
+
+theorem factorization_pow₀ {p m n : ℕ} :
+    (m ^ n).factorization p = n * m.factorization p := by {
+  induction' n with k hk
+  · simp only [pow_zero, factorization_one, coe_zero, Pi.zero_apply, zero_mul]
+  · simp only [factorization_pow, coe_smul, Pi.smul_apply, smul_eq_mul]
+}
+
+theorem factorization_pow_self {p n : ℕ} (hp : p.Prime) : (p ^ n).factorization p = n := by {
+  simp only [factorization_pow, coe_smul, Pi.smul_apply, smul_eq_mul]
+  have h1: p.factorization p = 1 := by {
+    exact Prime.factorization_self hp
+  }
+  rw [h1]
+  simp
+}
+
+theorem factorization_eq_card_pow_dvd₀ {m n b : ℕ} (hm : m ≠ 1)
+  (hm2: m.Prime) (hn : 0 < n) (hb : log m n < b) :
+    n.factorization m = #{i ∈ Ico 1 b | m ^ i ∣ n} :=
+  have fin := Nat.finiteMultiplicity_iff.2 ⟨hm, hn⟩
+  calc
+    n.factorization m = #(Ico 1 <| multiplicity m n + 1) := by {
+      simp only [card_Ico, add_tsub_cancel_right]
+      rw [← multiplicity_eq_factorization]
+      · exact hm2
+      exact not_eq_zero_of_lt hn
+    }
+    _ = #{i ∈ Ico 1 b | m ^ i ∣ n} := by {
+      apply congr_arg _
+      apply Finset.ext fun i => by {
+        simp only [mem_Ico, Nat.lt_succ_iff,
+          fin.pow_dvd_iff_le_multiplicity, Finset.mem_filter,
+          and_assoc, and_congr_right_iff, iff_and_self]
+        intro hi h
+        rw [← fin.pow_dvd_iff_le_multiplicity] at h
+        rcases m with - | m
+        · rw [zero_pow, zero_dvd_iff] at h
+          exacts [(hn.ne' h).elim, one_le_iff_ne_zero.1 hi]
+        refine LE.le.trans_lt ?_ hb
+        exact le_log_of_pow_le (one_lt_iff_ne_zero_and_ne_one.2 ⟨m.succ_ne_zero, hm⟩)
+          (le_of_dvd hn h)
+      }
+    }
+
+/-- **Legendre's Theorem**
+
+The multiplicity of a prime in `n!` is the sum of the quotients `n / p ^ i`. This sum is expressed
+over the finset `Ico 1 b` where `b` is any bound greater than `log p n`. -/
+theorem factorization_factorial {p : ℕ} (hp : p.Prime) :
+  ∀ {n b : ℕ}, log p n < b → (n !).factorization p = (∑ i ∈ Ico 1 b, n / p ^ i : ℕ)
+  | 0, b, _ => by simp only [factorial_zero, factorization_one, coe_zero, Pi.zero_apply,
+    Nat.zero_div, sum_const_zero]
+  | n + 1, b, hb =>
+    calc
+      ((n + 1)!).factorization p = ( (n + 1) * (n !)).factorization p := by
+        rw [← factorial_succ]
+      _ = (n + 1).factorization p + (n !).factorization p := by
+        have p1: n + 1 ≠ 0 := by exact Ne.symm (zero_ne_add_one n)
+        apply factorization_mul₀ p1 (factorial_ne_zero n) (hp)
+      _ = #{i ∈ Ico 1 b | p ^ i ∣ n + 1} + (∑ i ∈ Ico 1 b, n / p ^ i : ℕ) := by
+        rw [factorization_factorial hp ((log_mono_right <| le_succ _).trans_lt hb)]
+        simp only [add_left_inj]
+        apply factorization_eq_card_pow_dvd₀ (Prime.ne_one hp) hp (zero_lt_succ n)
+        exact hb
+      _ = (∑ i ∈ Ico 1 b, n / p ^ i : ℕ) + #{i ∈ Ico 1 b | p ^ i ∣ n + 1} := by
+        exact
+          Nat.add_comm (#(Finset.filter (fun i ↦ p ^ i ∣ n + 1) (Ico 1 b)))
+            (∑ i ∈ Ico 1 b, n / p ^ i)
+      _ = (∑ i ∈ Ico 1 b, (n / p ^ i + if p ^ i ∣ n + 1 then 1 else 0) : ℕ) := by
+        rw [sum_add_distrib, sum_boole]
+        simp
+      _ = (∑ i ∈ Ico 1 b, (n + 1) / p ^ i : ℕ) :=
+        Finset.sum_congr rfl fun _ _ => (succ_div _ _).symm
+
+/-- For a prime number `p`, taking `(p - 1)` times the multiplicity of `p` in `n!` equals `n` minus
+the sum of base `p` digits of `n`. -/
+theorem sub_one_mul_factorization_factorial {n p : ℕ} (hp : p.Prime) :
+    (p - 1) * (n !).factorization p = n - (p.digits n).sum := by {
+  simp only [factorization_factorial hp <| lt_succ_of_lt <| lt.base (log p n),
+    ← Finset.sum_Ico_add' _ 0 _ 1, Ico_zero_eq_range, ←
+    sub_one_mul_sum_log_div_pow_eq_sub_sum_digits]
+}
+
+/-- The multiplicity of `p` in `(p * (n + 1))!` is one more than the sum
+  of the multiplicities of `p` in `(p * n)!` and `n + 1`. -/
+theorem factorization_factorial_mul_succ {n p : ℕ} (hp : p.Prime) :
+    ((p * (n + 1))!).factorization p = ((p * n)!).factorization p + (n + 1).factorization p + 1 := by {
+  sorry
+}
+
+theorem factorization_factorial_mul {n p : ℕ} (hp : p.Prime) :
+    ((p * n)!).factorization p = (n !).factorization p + n := by
+  induction' n with n ih
+  · simp
+  · simp only [hp, factorization_factorial_mul_succ, ih, factorial_succ,
+    cast_add, cast_one, ← add_assoc]
+    congr 1
+    rw [factorization_mul₀]
+    · ring
+    · exact Ne.symm (zero_ne_add_one n)
+    · exact factorial_ne_zero n
+    · exact hp
+
+theorem factorization_factorial_le_div_pred {p : ℕ} (hp : p.Prime) (n : ℕ) :
+    (n !).factorization p ≤ (n / (p - 1) : ℕ) := by
+  have h1 : log p n < (log p n).succ := by exact Nat.lt_add_one (log p n)
+  rw [factorization_factorial hp (h1)]
+  exact Nat.geom_sum_Ico_le hp.two_le _ _
+
+theorem multiplicity_choose_aux {p n b k : ℕ} (hp : p.Prime) (hkn : k ≤ n) :
+    ∑ i ∈ Finset.Ico 1 b, n / p ^ i =
+      ((∑ i ∈ Finset.Ico 1 b, k / p ^ i) + ∑ i ∈ Finset.Ico 1 b, (n - k) / p ^ i) +
+        #{i ∈ Ico 1 b | p ^ i ≤ k % p ^ i + (n - k) % p ^ i} :=
+  calc
+    ∑ i ∈ Finset.Ico 1 b, n / p ^ i = ∑ i ∈ Finset.Ico 1 b, (k + (n - k)) / p ^ i := by
+      simp only [add_tsub_cancel_of_le hkn]
+    _ = ∑ i ∈ Finset.Ico 1 b,
+          (k / p ^ i + (n - k) / p ^ i + if p ^ i ≤ k % p ^ i + (n - k) % p ^ i then 1 else 0) := by
+      simp only [Nat.add_div (pow_pos hp.pos _)]
+    _ = _ := by simp [sum_add_distrib, sum_boole]
+
+
+/-- The multiplicity of `p` in `choose (n + k) k` is the number of carries when `k` and `n`
+  are added in base `p`. The set is expressed by filtering `Ico 1 b` where `b`
+  is any bound greater than `log p (n + k)`. -/
+theorem factorization_choose' {p n k b : ℕ} (hp : p.Prime) (hnb : log p (n + k) < b) :
+    (choose (n + k) k).factorization p = #{i ∈ Ico 1 b | p ^ i ≤ k % p ^ i + n % p ^ i} := by
+  have h₁ :
+      (choose (n + k) k).factorization p +  (k ! * n !).factorization p =
+        #{i ∈ Ico 1 b | p ^ i ≤ k % p ^ i + n % p ^ i} + (k ! * n !).factorization p := by
+    rw [← factorization_mul₀, ← mul_assoc]
+    have h2:= (add_tsub_cancel_right n k) ▸ choose_mul_factorial_mul_factorial (le_add_left k n)
+    rw [h2, factorization_factorial hp hnb, factorization_mul₀,
+      factorization_factorial hp ((log_mono_right (le_add_left k n)).trans_lt hnb),
+      factorization_factorial hp ((log_mono_right (le_add_left n k)).trans_lt
+      (add_comm n k ▸ hnb)), multiplicity_choose_aux hp (le_add_left k n)]
+    simp [add_comm]
+    exact factorial_ne_zero k
+    exact factorial_ne_zero n
+    exact hp
+    · intro h
+      rw [Nat.choose_eq_zero_iff] at h
+      omega
+    · have h1 : n ! ≠ 0 := by exact factorial_ne_zero n
+      have h2 : k ! ≠ 0 := by exact factorial_ne_zero k
+      exact Nat.mul_ne_zero h2 h1
+    · exact hp
+  exact Nat.add_right_cancel h₁
+
+/-- The multiplicity of `p` in `choose n k` is the number of carries when `k` and `n - k`
+  are added in base `p`. The set is expressed by filtering `Ico 1 b` where `b`
+  is any bound greater than `log p n`. -/
+theorem factorization_choose {p n k b : ℕ} (hp : p.Prime) (hkn : k ≤ n) (hnb : log p n < b) :
+    (choose n k).factorization p = #{i ∈ Ico 1 b | p ^ i ≤ k % p ^ i + (n - k) % p ^ i} := by
+  have := Nat.sub_add_cancel hkn
+  convert @factorization_choose' p (n - k) k b hp _
+  · rw [this]
+  · rw [this]
+    exact hnb
+
+
+theorem factorization_le_factorization_of_dvd_right {a b c : ℕ} (h : b ∣ c) :
+    b.factorization a ≤ c.factorization a :=
+  sorry
+
+/-- A lower bound on the multiplicity of `p` in `choose n k`. -/
+theorem factorization_le_factorization_choose_add {p : ℕ} (hp : p.Prime) :
+    ∀ n k : ℕ, (k ≤ n) → n.factorization p ≤ (choose n k).factorization p + k.factorization p
+  | x, 0 => by {
+    -- yea, something is wrong here I gotta figure out what
+    sorry
+  }
+  | 0, x + 1 => by simp
+  | n + 1, k + 1 => by
+    intro h
+    rw [← factorization_mul₀]
+    refine factorization_le_factorization_of_dvd_right ?_
+    rw [← succ_mul_choose_eq]
+    exact dvd_mul_right _ _
+    · intro h2
+      rw [choose_eq_zero_iff] at h2
+      omega
+    · exact Ne.symm (zero_ne_add_one k)
+    · exact hp
+
+variable {p n k : ℕ}
+
+theorem factorization_choose_prime_pow_add_emultiplicity (hp : p.Prime) (hkn : k ≤ p ^ n)
+    (hk0 : k ≠ 0) : (choose (p ^ n) k).factorization p + k.factorization p = n :=
+  le_antisymm
+    (sorry)
+    (by rw [← factorization_pow_self hp]; exact factorization_le_factorization_choose_add hp _ _)
+
+theorem factorization_choose_prime_pow {p n k : ℕ} (hp : p.Prime) (hkn : k ≤ p ^ n) (hk0 : k ≠ 0) :
+    (choose (p ^ n) k).factorization p = ↑(n - k.factorization p) := by {
+  nth_rewrite 2 [← factorization_choose_prime_pow_add_emultiplicity hp hkn hk0]
+  rw [Nat.add_sub_cancel_right]
+}
+
 
 
 -- TODO: Port lemmas from `Data/Nat/Multiplicity` to here, re-written in terms of `factorization`
